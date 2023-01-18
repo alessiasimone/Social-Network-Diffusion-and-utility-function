@@ -1,0 +1,198 @@
+extensions [nw] ; network extention to generate real world networks
+breed [group person] ;turtles are called group, individuals are called person
+directed-link-breed [influences influence] ;directed link are called influences
+links-own [weight alternative] ;weight -> random weight assigned to each directed link, alternaive -> weight * p of end1 value to transfer to end2
+group-own [p utility preferences oldsum] ;p -> probability to assume red idea, utility -> individual utility function, preferences -> list of alternatives, oldsum -> spreading value of influence
+globals [changing] ;stopping condition
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;                           ;;
+;;          SETUP            ;;
+;;                           ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to setcounts ;stopping condition
+  set changing true
+  set members members
+end 
+
+;generation of the "real world" networks
+
+to setup-pa ;generate preferential-attachment
+  ca
+  setcounts
+  nw:generate-preferential-attachment group influences members 1 [ ;generates network according to the Barabási–Albert algorithm
+    set color grey ;each turtle starts with the same grey color
+    setxy random-xcor random-ycor ;turtles are positioned into the world randomly
+    set shape "person"
+    set size 2]
+  assign-weight
+  assign-p
+  show-label
+  watch-one
+  reset-ticks
+end 
+
+to setup-small-world ;generate small-world network
+  ca
+  setcounts
+  nw:generate-watts-strogatz group influences members 1 1 [ ;generates network according to the Kleinberg Model
+    set color grey
+    setxy random-xcor random-ycor
+    set shape "person"
+    set size 2]
+  assign-weight
+  assign-p
+  show-label
+  watch-one
+  reset-ticks
+end 
+
+to setup-random ;generate random network
+  ca
+  setcounts
+  nw:generate-random group influences members 1 [ ;generates network according to the Erdős–Rényi model
+    set color grey
+    setxy random-xcor random-ycor
+    set shape "person"
+    set size 2]
+  assign-weight
+  assign-p
+  show-label
+  watch-one
+  reset-ticks
+end 
+
+to assign-weight ;assign random weight to links in range [ 0 , 1 ]
+  ask influences [set weight ( round (1000 * random-float 1) / 1000) ] ;this computation allows to avoid tiny variations
+end 
+
+to assign-p ;assign random probability to agents in range [ 0 , 1 ]
+  ask group [set p random 2  ]
+  ask group [ if (p = 1) [ set color red ]  ] ;changing to p=1 for red, 1 - p for grey
+  ask group [ if (p = 0) [ set p -1 set color grey]]
+end 
+
+to show-label ;is the switch-bar is on, the probability and weights of each turtles and links are displayed
+  if label? = true [
+    ask group [set label who]
+    ask influences [ set label precision weight 1 ]]
+end 
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;                           ;;
+;;       EXPERIMENT          ;;
+;;                           ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to behavior
+  ;behavior works as a neural network and determinants corresponds to the sum of links weights of incoming influence. Each edge will collect
+  ;the netweight value by computing p * w of its starting node and the final node will collect the summation of all the received netweight.
+  if (changing = false) [ print "no longer changing, stop." stop] ;adding stopping condition
+  if (ticks > 20) [stop] ;set up a maximum of 20 iterations
+  set changing  false
+
+  print (word "=================== tick # " ticks " =====================================")
+
+  ask influences [ if [color = red ] of end1 [set color red ]] ;detect the spread of idea
+  ask group   [
+     let summer 0 ;set up a summer that will be updated each time an individual receive p * w
+     ask my-in-links [
+         let netweight ( weight * ( [ p ] of end1 )  ) ;spread p * w fron end1 to end2
+         set summer ( summer + netweight)] ;updating summation of p * w value
+     set oldsum precision oldsum 3
+     set summer precision summer 3
+    if  (oldsum != summer) [   set changing true ]
+       if  (oldsum != summer) and (ticks > 2)  [ set changing true ] ;if updating don't change for the next two tick, simulation will stop to avoid cycle
+    set oldsum summer
+    let oldcolor color
+    (ifelse (summer > threshold)  [ ;according to the desired threshold
+      set p  1
+      set color red
+      if ( color != oldcolor) [ print (word who " turned red") ]] ;updating p and color of individual and display changement on command center
+      (summer < threshold * -1) [
+        set p -1
+        set color grey
+        if ( color != oldcolor) [ print (word who " turned grey") ]])]
+  show-label
+  individual-utility
+  watch-one
+  tick
+end 
+
+to individual-utility
+  ;computation of the individual utility consist on choosing the maximum netweight value, here called alternative.
+  ask influences [set alternative weight * [p] of end1] ;alternative = weight * p and pass throw links
+  ask group [
+    ifelse my-in-links = true ;asking only to individuals who receive a weighted input
+      [set preferences (list ([alternative] of my-in-links)) ;building a list of alternatives (weight * p) from receiving links
+       set utility max preferences] ;choosing the maximum between alternatives
+      [set utility p]]     ;if individuals don't receive any weighted input, his utility will correspond to his initial beliefs
+end 
+
+to watch-one ;if the switch-bar is on, it allows to highlight a single individual's behavior in addition to his utility function
+  if watch? = true [
+    watch person 0]
+end 
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;                      ;;
+;;   PARAMETERS [3]     ;;
+;;                      ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to-report modularity ;measure modularity related to grey and red members
+  report nw:modularity (list (turtles with [ color = grey ]) (turtles with [ color = red ]))
+end 
+
+to save-matrix ;save txt of adjacency matrix that contains the connection between members not taking into consideration the links' weight
+  nw:save-matrix "adjacency-matrix.txt"
+end 
+
+to community-detection ;detect community using the louvain method
+  color-clusters nw:louvain-communities
+end 
+
+to color-clusters [ clusters ] ;assignment of a color for each cluster
+  ask group [ set color grey ]
+  ask influences [ set color grey - 2 ]
+  let n length clusters
+  let hues n-values n [ i -> (360 * i / n) ]
+  (foreach clusters hues [ [cluster hue] ->
+    ask cluster [
+      set color hsb hue 100 100
+      ask my-links with [ member? other-end cluster ] [ set color hsb hue 100 75 ]]])
+end 
+
+to betweenness ;detect betweenness centrality of each member
+  centrality [ -> nw:betweenness-centrality ]
+end 
+
+to eigenvector ;as the simulation represent the spread of a concept (due to the placement of beliefs) eigenvector centrality is represented by the inverse of its original sense
+  centrality [ -> 1 - nw:eigenvector-centrality ]
+end 
+
+to closeness ;weighted closeness centrality by taking into consideration the weight variable assigned to directed links
+  centrality [ -> nw:weighted-closeness-centrality weight]
+end 
+
+to centrality [ measure ] ;assignment of a size according to the centrality measure
+  ask group [
+    let res (runresult measure)
+    ifelse is-number? res [
+      set label precision res 2
+      set size res]
+    [ set label res
+      set size 1 ]]
+  normalize-sizes-and-colors
+end 
+
+to normalize-sizes-and-colors ;normalization of the size assigned
+  if count group > 0 [
+    let sizes sort [ size ] of group
+    let delta last sizes - first sizes
+    ifelse delta = 0 [
+      ask group [ set size 1 ]]
+    [ ask group [ set size ((size - first sizes) / delta) * 2 + 0.5 ]]]
+end 
